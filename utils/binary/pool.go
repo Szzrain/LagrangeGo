@@ -7,13 +7,11 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"sync"
-
-	ftea "github.com/fumiama/gofastTEA"
 )
 
 var bufferPool = sync.Pool{
 	New: func() any {
-		return new(bytes.Buffer)
+		return new(Builder)
 	},
 }
 
@@ -22,16 +20,17 @@ func SelectBuilder(key []byte) *Builder {
 	// 因为 bufferPool 定义有 New 函数
 	// 所以 bufferPool.Get() 永不为 nil
 	// 不用判空
-	bd := bufferPool.Get().(*Builder)
-	bd.key = ftea.NewTeaCipher(key)
-	bd.usetea = len(key) == 16
-	return bd
+	return bufferPool.Get().(*Builder).init(key)
 }
 
 // PutBuilder 将 Builder 放回池中
 func PutBuilder(w *Builder) {
 	// See https://golang.org/issue/23199
 	const maxSize = 32 * 1024
+	if w.hasput {
+		return
+	}
+	w.hasput = true
 	if w.buffer.Cap() < maxSize { // 对于大Buffer直接丢弃
 		w.buffer.Reset()
 		bufferPool.Put(w)

@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+	"net"
+	"runtime"
 	"strconv"
 	"unsafe"
 
@@ -14,52 +16,105 @@ import (
 )
 
 type Builder struct {
-	buffer *bytes.Buffer
+	buffer bytes.Buffer
 	key    ftea.TEA
 	usetea bool
+	hasput bool
+	hasset bool
 	io.Writer
 	io.ReaderFrom
 }
 
+// NewWriterF from https://github.com/Mrs4s/MiraiGo/blob/master/binary/writer.go
+func NewWriterF(f func(writer *Builder)) []byte {
+	w := SelectBuilder(nil)
+	f(w)
+	b := make([]byte, w.Len())
+	copy(b, w.ToBytes())
+	w.put()
+	return b
+}
+
+// OpenWriterF must call func cl to close from https://github.com/Mrs4s/MiraiGo/blob/master/binary/writer.go
+func OpenWriterF(f func(builder *Builder)) (b []byte, cl func()) {
+	w := SelectBuilder(nil)
+	f(w)
+	return w.ToBytes(), w.put
+}
+
+// ToBytes from https://github.com/Mrs4s/MiraiGo/blob/master/binary/writer.go
+func ToBytes(i any) []byte {
+	return NewWriterF(func(w *Builder) {
+		// TODO: more types
+		switch t := i.(type) {
+		case int16:
+			w.WriteU16(uint16(t))
+		case int32:
+			w.WriteU32(uint32(t))
+		}
+	})
+}
+
+// NewBuilder with finalizer of itself.
+//
+// Be sure to use all data before builder is GCed.
 func NewBuilder(key []byte) *Builder {
-	return &Builder{
-		buffer: bytes.NewBuffer(make([]byte, 0, 64)),
-		key:    ftea.NewTeaCipher(key),
-		usetea: len(key) == 16,
+	b := SelectBuilder(key)
+	if !b.hasset {
+		b.hasset = true
+		runtime.SetFinalizer(b, func(b any) {
+			b.(*Builder).put()
+		})
 	}
+	return b
+}
+
+func (b *Builder) init(key []byte) *Builder {
+	b.key = ftea.NewTeaCipher(key)
+	b.usetea = len(key) == 16
+	b.hasput = false
+	return b
+}
+
+func (b *Builder) put() {
+	PutBuilder(b)
 }
 
 func (b *Builder) Len() int {
 	return b.buffer.Len()
 }
 
-func (b *Builder) append(v []byte) {
-	b.buffer.Write(v)
+// ToReader GC 不安全, 确保在 Builder 被回收前使用
+func (b *Builder) ToReader() io.Reader {
+	return &b.buffer
 }
 
-// data 带 tea 加密, 不可用作提取 b.buffer
-func (b *Builder) data() []byte {
+// Buffer GC 不安全, 确保在 Builder 被回收前使用
+func (b *Builder) Buffer() *bytes.Buffer {
+	return &b.buffer
+}
+
+// ToBytes return data with tea encryption if key is set
+//
+// GC 安全, 返回的数据在 Builder 被销毁之后仍能被正确读取,
+// 但是只能调用一次, 调用后 Builder 即失效
+func (b *Builder) ToBytes() []byte {
+	defer b.put()
 	if b.usetea {
 		return b.key.Encrypt(b.buffer.Bytes())
 	}
-	return b.buffer.Bytes()
+	buf := make([]byte, b.Len())
+	copy(buf, b.buffer.Bytes())
+	return buf
 }
 
-func (b *Builder) pack(v any) error {
-	return binary.Write(b.buffer, binary.BigEndian, v)
-}
-
-func (b *Builder) ToReader() io.Reader {
-	return b.buffer
-}
-
-// ToBytes return data with tea encryption
-func (b *Builder) ToBytes() []byte {
-	return b.data()
-}
-
-// Pack TLV with tea encryption
+// Pack TLV with tea encryption if key is set
+//
+// GC 安全, 返回的数据在 Builder 被销毁之后仍能被正确读取,
+// 但是只能调用一次, 调用后 Builder 即失效
 func (b *Builder) Pack(typ uint16) []byte {
+	defer b.put()
+
 	buf := make([]byte, b.Len()+2+2+16)
 
 	n := 0
@@ -77,9 +132,9 @@ func (b *Builder) Pack(typ uint16) []byte {
 
 func (b *Builder) WriteBool(v bool) *Builder {
 	if v {
-		b.buffer.WriteByte('1')
+		b.WriteU8('1')
 	} else {
-		b.buffer.WriteByte('0')
+		b.WriteU8('0')
 	}
 	return b
 }
@@ -106,7 +161,7 @@ func (b *Builder) WritePacketBytes(v []byte, prefix string, withPrefix bool) *Bu
 	default:
 		panic("invaild prefix")
 	}
-	b.append(v)
+	b.WriteBytes(v)
 	return b
 }
 
@@ -114,22 +169,29 @@ func (b *Builder) WritePacketString(s, prefix string, withPrefix bool) *Builder 
 	return b.WritePacketBytes(utils.S2B(s), prefix, withPrefix)
 }
 
+// Write for impl. io.Writer
 func (b *Builder) Write(p []byte) (n int, err error) {
 	return b.buffer.Write(p)
 }
 
+func (b *Builder) EncryptAndWrite(key []byte, data []byte) *Builder {
+	_, _ = b.Write(ftea.NewTeaCipher(key).Encrypt(data))
+	return b
+}
+
+// ReadFrom for impl. io.ReaderFrom
 func (b *Builder) ReadFrom(r io.Reader) (n int64, err error) {
-	return io.Copy(b.buffer, r)
+	return io.Copy(&b.buffer, r)
 }
 
 func (b *Builder) WriteLenBytes(v []byte) *Builder {
 	b.WriteU16(uint16(len(v)))
-	b.append(v)
+	b.WriteBytes(v)
 	return b
 }
 
 func (b *Builder) WriteBytes(v []byte) *Builder {
-	b.append(v)
+	_, _ = b.Write(v)
 	return b
 }
 
@@ -139,10 +201,7 @@ func (b *Builder) WriteLenString(v string) *Builder {
 
 func (b *Builder) WriteStruct(data ...any) *Builder {
 	for _, data := range data {
-		err := b.pack(data)
-		if err != nil {
-			panic(err)
-		}
+		_ = binary.Write(&b.buffer, binary.BigEndian, data)
 	}
 	return b
 }
@@ -195,10 +254,8 @@ func (b *Builder) WriteDouble(v float64) *Builder {
 	return b.WriteU64(math.Float64bits(v))
 }
 
-func (b *Builder) WriteTlv(tlvs ...[]byte) *Builder {
+func (b *Builder) WriteTLV(tlvs ...[]byte) *Builder {
 	b.WriteU16(uint16(len(tlvs)))
-	for _, tlv := range tlvs {
-		b.WriteBytes(tlv)
-	}
+	_, _ = io.Copy(b, (*net.Buffers)(&tlvs))
 	return b
 }

@@ -1,9 +1,9 @@
 package client
 
 import (
+	"github.com/LagrangeDev/LagrangeGo/client/packets/pb/action"
+	"github.com/LagrangeDev/LagrangeGo/client/packets/pb/message"
 	message2 "github.com/LagrangeDev/LagrangeGo/message"
-	"github.com/LagrangeDev/LagrangeGo/packets/pb/action"
-	"github.com/LagrangeDev/LagrangeGo/packets/pb/message"
 	"github.com/LagrangeDev/LagrangeGo/utils"
 	"github.com/LagrangeDev/LagrangeGo/utils/crypto"
 	"github.com/RomiChan/protobuf/proto"
@@ -31,30 +31,36 @@ func (c *QQClient) SendRawMessage(route *message.RoutingHead, body *message.Mess
 		return
 	}
 
-	packet, err := c.SendUniPacketAndAwait("MessageSvc.PbSendMsg", data)
+	packet, err := c.sendUniPacketAndWait("MessageSvc.PbSendMsg", data)
 	if err != nil {
 		return
 	}
 	resp = &action.SendMessageResponse{}
-	err = proto.Unmarshal(packet.Data, resp)
+	err = proto.Unmarshal(packet, resp)
 	if err != nil {
 		return
 	}
 	return
 }
 
-func (c *QQClient) SendGroupMessage(groupUin uint32, elements []message2.IMessageElement) (resp *action.SendMessageResponse, err error) {
-	elements = preprocessGroupMessage(c, groupUin, elements)
-	body := message2.BuildMessageElements(elements)
+// SendGroupMessage 发送群聊消息，默认会对消息进行预处理
+func (c *QQClient) SendGroupMessage(groupUin uint32, elements []message2.IMessageElement, needPreprocess ...bool) (resp *action.SendMessageResponse, err error) {
+	if needPreprocess == nil || needPreprocess[0] {
+		elements = c.preProcessGroupMessage(groupUin, elements)
+	}
+	body := message2.PackElementsToBody(elements)
 	route := &message.RoutingHead{
 		Grp: &message.Grp{GroupCode: proto.Some(groupUin)},
 	}
 	return c.SendRawMessage(route, body)
 }
 
-func (c *QQClient) SendPrivateMessage(uin uint32, elements []message2.IMessageElement) (resp *action.SendMessageResponse, err error) {
-	elements = preprocessPrivateMessage(c, uin, elements)
-	body := message2.BuildMessageElements(elements)
+// SendPrivateMessage 发送群聊消息，默认会对消息进行预处理
+func (c *QQClient) SendPrivateMessage(uin uint32, elements []message2.IMessageElement, needPreprocess ...bool) (resp *action.SendMessageResponse, err error) {
+	if needPreprocess == nil || needPreprocess[0] {
+		elements = c.preProcessPrivateMessage(uin, elements)
+	}
+	body := message2.PackElementsToBody(elements)
 	route := &message.RoutingHead{
 		C2C: &message.C2C{
 			Uid: proto.Some(c.GetUid(uin)),
@@ -64,7 +70,7 @@ func (c *QQClient) SendPrivateMessage(uin uint32, elements []message2.IMessageEl
 }
 
 func (c *QQClient) SendTempMessage(groupID uint32, uin uint32, elements []message2.IMessageElement) (resp *action.SendMessageResponse, err error) {
-	body := message2.BuildMessageElements(elements)
+	body := message2.PackElementsToBody(elements)
 	route := &message.RoutingHead{
 		GrpTmp: &message.GrpTmp{
 			GroupUin: proto.Some(groupID),
@@ -74,11 +80,11 @@ func (c *QQClient) SendTempMessage(groupID uint32, uin uint32, elements []messag
 	return c.SendRawMessage(route, body)
 }
 
-func preprocessGroupMessage(client *QQClient, groupUin uint32, elements []message2.IMessageElement) []message2.IMessageElement {
+func (c *QQClient) preProcessGroupMessage(groupUin uint32, elements []message2.IMessageElement) []message2.IMessageElement {
 	for _, element := range elements {
 		switch elem := element.(type) {
 		case *message2.AtElement:
-			member, _ := client.GetCachedMemberInfo(elem.Target, groupUin)
+			member := c.GetCachedMemberInfo(elem.Target, groupUin)
 			if member != nil {
 				elem.UID = member.Uid
 				if member.MemberCard != "" {
@@ -87,13 +93,22 @@ func preprocessGroupMessage(client *QQClient, groupUin uint32, elements []messag
 					elem.Display = "@" + member.MemberName
 				}
 			}
-		case *message2.GroupImageElement:
-			_, err := client.ImageUploadGroup(groupUin, elem)
+		case *message2.ImageElement:
+			_, err := c.ImageUploadGroup(groupUin, elem)
 			if err != nil {
-				networkLogger.Errorln(err)
+				c.errorln(err)
 			}
 			if elem.MsgInfo == nil {
-				networkLogger.Errorln("ImageUploadGroup failed")
+				c.errorln("ImageUploadGroup failed")
+				continue
+			}
+		case *message2.VoiceElement:
+			_, err := c.RecordUploadGroup(groupUin, elem)
+			if err != nil {
+				c.errorln(err)
+			}
+			if elem.MsgInfo == nil {
+				c.errorln("RecordUploadGroup failed")
 				continue
 			}
 		default:
@@ -102,18 +117,27 @@ func preprocessGroupMessage(client *QQClient, groupUin uint32, elements []messag
 	return elements
 }
 
-func preprocessPrivateMessage(client *QQClient, targetUin uint32, elements []message2.IMessageElement) []message2.IMessageElement {
+func (c *QQClient) preProcessPrivateMessage(targetUin uint32, elements []message2.IMessageElement) []message2.IMessageElement {
 	for _, element := range elements {
 		switch elem := element.(type) {
-		case *message2.FriendImageElement:
-			targetUid := client.GetUid(targetUin)
-			_, err := client.ImageUploadPrivate(targetUid, elem)
+		case *message2.ImageElement:
+			targetUid := c.GetUid(targetUin)
+			_, err := c.ImageUploadPrivate(targetUid, elem)
 			if err != nil {
-				networkLogger.Errorln(err)
+				c.errorln(err)
 			}
 			if elem.MsgInfo == nil {
-				networkLogger.Errorln("ImageUploadPrivate failed")
+				c.errorln("ImageUploadPrivate failed")
 				continue
+			}
+		case *message2.VoiceElement:
+			targetUid := c.GetUid(targetUin)
+			_, err := c.RecordUploadPrivate(targetUid, elem)
+			if err != nil {
+				c.errorln(err)
+			}
+			if elem.MsgInfo == nil {
+				c.errorln("RecordUploadPrivate failed")
 			}
 		default:
 		}

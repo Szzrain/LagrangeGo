@@ -1,7 +1,7 @@
 package client
 
 import (
-	"github.com/LagrangeDev/LagrangeGo/entity"
+	"github.com/LagrangeDev/LagrangeGo/client/entity"
 )
 
 // GetUid 获取缓存中对应uin的uid
@@ -30,53 +30,63 @@ func (c *QQClient) GetUin(uid string, groupUin ...uint32) uint32 {
 }
 
 // GetCachedFriendInfo 获取好友信息(缓存)
-func (c *QQClient) GetCachedFriendInfo(uin uint32) (*entity.Friend, error) {
+func (c *QQClient) GetCachedFriendInfo(uin uint32) *entity.Friend {
 	if c.cache.FriendCacheIsEmpty() {
 		if err := c.RefreshFriendCache(); err != nil {
-			return nil, err
+			return nil
 		}
 	}
-	return c.cache.GetFriend(uin), nil
+	return c.cache.GetFriend(uin)
+}
+
+// GetCachedAllFriendsInfo 获取所有好友信息(缓存)
+func (c *QQClient) GetCachedAllFriendsInfo() map[uint32]*entity.Friend {
+	if c.cache.FriendCacheIsEmpty() {
+		if err := c.RefreshFriendCache(); err != nil {
+			return nil
+		}
+	}
+	return c.cache.GetAllFriends()
 }
 
 // GetCachedGroupInfo 获取群信息(缓存)
-func (c *QQClient) GetCachedGroupInfo(groupUin uint32) (*entity.Group, error) {
+func (c *QQClient) GetCachedGroupInfo(groupUin uint32) *entity.Group {
 	if c.cache.GroupInfoCacheIsEmpty() {
 		if err := c.RefreshAllGroupsInfo(); err != nil {
-			return nil, err
+			return nil
 		}
 	}
-	return c.cache.GetGroupInfo(groupUin), nil
+	return c.cache.GetGroupInfo(groupUin)
 }
 
 // GetCachedAllGroupsInfo 获取所有群信息(缓存)
-func (c *QQClient) GetCachedAllGroupsInfo() (map[uint32]*entity.Group, error) {
+func (c *QQClient) GetCachedAllGroupsInfo() map[uint32]*entity.Group {
 	if c.cache.GroupInfoCacheIsEmpty() {
 		if err := c.RefreshAllGroupsInfo(); err != nil {
-			return nil, err
+			return nil
 		}
 	}
-	return c.cache.GetAllGroupsInfo(), nil
+	return c.cache.GetAllGroupsInfo()
 }
 
 // GetCachedMemberInfo 获取群成员信息(缓存)
-func (c *QQClient) GetCachedMemberInfo(uin, groupUin uint32) (*entity.GroupMember, error) {
+func (c *QQClient) GetCachedMemberInfo(uin, groupUin uint32) *entity.GroupMember {
 	if c.cache.GroupMemberCacheIsEmpty(groupUin) {
 		if err := c.RefreshGroupMembersCache(groupUin); err != nil {
-			return nil, err
+			return nil
 		}
 	}
-	return c.cache.GetGroupMember(uin, groupUin), nil
+	return c.cache.GetGroupMember(uin, groupUin)
 }
 
 // GetCachedMembersInfo 获取指定群所有群成员信息(缓存)
-func (c *QQClient) GetCachedMembersInfo(groupUin uint32) (map[uint32]*entity.GroupMember, error) {
+func (c *QQClient) GetCachedMembersInfo(groupUin uint32) map[uint32]*entity.GroupMember {
 	if c.cache.GroupMemberCacheIsEmpty(groupUin) {
 		if err := c.RefreshGroupMembersCache(groupUin); err != nil {
-			return nil, err
+			return nil
 		}
 	}
-	return c.cache.GetGroupMembers(groupUin), nil
+	return c.cache.GetGroupMembers(groupUin)
 }
 
 // RefreshFriendCache 刷新好友缓存
@@ -129,7 +139,7 @@ func (c *QQClient) GetFriendsData() (map[uint32]*entity.Friend, error) {
 	for _, friend := range friends {
 		friendsData[friend.Uin] = friend
 	}
-	loginLogger.Infof("获取%d个好友", len(friendsData))
+	c.info("获取%d个好友", len(friendsData))
 	return friendsData, err
 }
 
@@ -169,7 +179,7 @@ func (c *QQClient) GetAllGroupsMembersData() (map[uint32]map[uint32]*entity.Grou
 		}
 		groupsData[group.GroupUin] = groupMembersData
 	}
-	loginLogger.Infof("获取%d个群的成员信息", len(groupsData))
+	c.info("获取%d个群的成员信息", len(groupsData))
 	return groupsData, err
 }
 
@@ -182,6 +192,6 @@ func (c *QQClient) GetAllGroupsInfo() (map[uint32]*entity.Group, error) {
 	for _, group := range groupsInfo {
 		groupsData[group.GroupUin] = group
 	}
-	loginLogger.Infof("获取%d个群信息", len(groupsData))
+	c.info("获取%d个群信息", len(groupsData))
 	return groupsData, err
 }

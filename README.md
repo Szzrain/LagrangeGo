@@ -1,8 +1,6 @@
 # LagrangeGo
-ntqq 协议的golang实现 移植于 [Lagrange.Core](https://github.com/KonataDev/Lagrange.Core)/
-[lagrange-python](https://github.com/LagrangeDev/lagrange-python)  
-项目架构以及相当一部分的代码借鉴或来源于 [MiraiGo](https://github.com/Mrs4s/MiraiGo)  
-~~Readme也是抄的~~
+ntqq 协议的golang实现 移植于 [Lagrange.Core](https://github.com/KonataDev/Lagrange.Core) /
+[lagrange-python](https://github.com/LagrangeDev/lagrange-python) / [MiraiGo](https://github.com/Mrs4s/MiraiGo)
 
 ## 使用前声明
 本项目为协议实现，不推荐直接使用。
@@ -21,7 +19,7 @@ go get -u github.com/LagrangeDev/LagrangeGo
   <summary>已完成功能/开发计划列表</summary>
 
 **登录**
-- [ ] 账号密码登录
+- ~~[x] 账号密码登录~~
 - [x] 二维码登录
 - [ ] 验证码提交
 - [ ] 设备锁验证
@@ -30,8 +28,8 @@ go get -u github.com/LagrangeDev/LagrangeGo
 **消息类型**
 - [x] 文本
 - [x] 图片
-- [ ] 语音
-- [ ] 表情
+- [x] 语音
+- [x] 表情
 - [x] At
 - [ ] 回复
 - [ ] 长消息(仅群聊/私聊)
@@ -99,6 +97,6 @@ _为防止滥用，不支持主动邀请新成员进群_
 
 [![Contributors](https://contributors-img.web.app/image?repo=LagrangeDev/LagrangeGo)](https://github.com/LagrangeDev/LagrangeGo/graphs/contributors)
 
-此项目引用了[MiraiGo](https://github.com/Mrs4s/MiraiGo)的相当一部分代码，但是没有fork原仓库，所以MiraiGo的Contributors也应该放在这  
+[MiraiGo](https://github.com/Mrs4s/MiraiGo)
 [![Contributors](https://contributors-img.web.app/image?repo=Mrs4s/MiraiGo)](https://github.com/Mrs4s/MiraiGo/graphs/contributors)
 

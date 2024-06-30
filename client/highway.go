@@ -10,25 +10,27 @@ import (
 	"net/url"
 	"strconv"
 
-	hw "github.com/LagrangeDev/LagrangeGo/client/highway"
-	highway2 "github.com/LagrangeDev/LagrangeGo/packets/highway"
-	"github.com/LagrangeDev/LagrangeGo/packets/pb/service/highway"
+	"github.com/LagrangeDev/LagrangeGo/utils"
+
+	hw "github.com/LagrangeDev/LagrangeGo/client/internal/highway"
+	highway2 "github.com/LagrangeDev/LagrangeGo/client/packets/highway"
+	"github.com/LagrangeDev/LagrangeGo/client/packets/pb/service/highway"
 	"github.com/LagrangeDev/LagrangeGo/utils/binary"
 	"github.com/LagrangeDev/LagrangeGo/utils/crypto"
 	"github.com/RomiChan/protobuf/proto"
 )
 
-func (c *QQClient) EnsureHighwayServers() error {
+func (c *QQClient) ensureHighwayServers() error {
 	if c.highwaySession.SsoAddr == nil || c.highwaySession.SigSession == nil || c.highwaySession.SessionKey == nil {
-		packet, err := highway2.BuildHighWayUrlReq(c.sig.Tgt)
+		packet, err := highway2.BuildHighWayUrlReq(c.transport.Sig.Tgt)
 		if err != nil {
 			return err
 		}
-		payload, err := c.SendUniPacketAndAwait("HttpConn.0x6ff_501", packet)
+		payload, err := c.sendUniPacketAndWait("HttpConn.0x6ff_501", packet)
 		if err != nil {
 			return fmt.Errorf("get highway server: %v", err)
 		}
-		resp, err := highway2.ParseHighWayUrlReq(payload.Data)
+		resp, err := highway2.ParseHighWayUrlReq(payload)
 		if err != nil {
 			return fmt.Errorf("parse highway server: %v", err)
 		}
@@ -39,7 +41,7 @@ func (c *QQClient) EnsureHighwayServers() error {
 				continue
 			}
 			for _, addr := range info.ServerAddrs {
-				networkLogger.Debugln("add highway server", binary.UInt32ToIPV4Address(addr.IP), "port", addr.Port)
+				c.debugln("add highway server", binary.UInt32ToIPV4Address(addr.IP), "port", addr.Port)
 				c.highwaySession.AppendAddr(addr.IP, addr.Port)
 			}
 		}
@@ -50,8 +52,10 @@ func (c *QQClient) EnsureHighwayServers() error {
 	return nil
 }
 
-func (c *QQClient) UploadSrcByStream(commonId int, r io.Reader, fileSize uint64, md5 []byte, extendInfo []byte) error {
-	err := c.EnsureHighwayServers()
+func (c *QQClient) highwayUpload(commonId int, r io.Reader, fileSize uint64, md5 []byte, extendInfo []byte) error {
+	// 能close的io就close
+	defer utils.CloseIO(r)
+	err := c.ensureHighwayServers()
 	if err != nil {
 		return err
 	}
@@ -61,7 +65,7 @@ func (c *QQClient) UploadSrcByStream(commonId int, r io.Reader, fileSize uint64,
 		Sum:       md5,
 		Size:      fileSize,
 		Ticket:    c.highwaySession.SigSession,
-		LoginSig:  c.sig.Tgt,
+		LoginSig:  c.transport.Sig.Tgt,
 		Ext:       extendInfo,
 	}
 	_, err = c.highwaySession.Upload(trans)
@@ -73,7 +77,7 @@ func (c *QQClient) UploadSrcByStream(commonId int, r io.Reader, fileSize uint64,
 	saddr := servers[rand.Intn(len(servers))]
 	server := fmt.Sprintf(
 		"http://%s:%d/cgi-bin/httpconn?htcmd=0x6FF0087&uin=%d",
-		binary.UInt32ToIPV4Address(saddr.IP), saddr.Port, c.sig.Uin,
+		binary.UInt32ToIPV4Address(saddr.IP), saddr.Port, c.transport.Sig.Uin,
 	)
 	buffer := make([]byte, hw.BlockSize)
 	for offset := uint64(0); offset < fileSize; offset += hw.BlockSize {
@@ -84,7 +88,7 @@ func (c *QQClient) UploadSrcByStream(commonId int, r io.Reader, fileSize uint64,
 		if err != nil {
 			return err
 		}
-		err = c.SendUpBlock(trans, server, offset, crypto.MD5Digest(buffer), buffer)
+		err = c.highwayUploadBlock(trans, server, offset, crypto.MD5Digest(buffer), buffer)
 		if err != nil {
 			return err
 		}
@@ -92,7 +96,7 @@ func (c *QQClient) UploadSrcByStream(commonId int, r io.Reader, fileSize uint64,
 	return nil
 }
 
-func (c *QQClient) SendUpBlock(trans *hw.Transaction, server string, offset uint64, blkmd5 []byte, blk []byte) error {
+func (c *QQClient) highwayUploadBlock(trans *hw.Transaction, server string, offset uint64, blkmd5 []byte, blk []byte) error {
 	blksz := uint64(len(blk))
 	isEnd := offset+blksz == trans.Size
 	payload, err := sendHighwayPacket(
@@ -106,7 +110,7 @@ func (c *QQClient) SendUpBlock(trans *hw.Transaction, server string, offset uint
 	if err != nil {
 		return fmt.Errorf("parse highway packet: %v", err)
 	}
-	networkLogger.Debugf("Highway Block Result: %d | %d | %x | %v",
+	c.debug("Highway Block Result: %d | %d | %x | %v",
 		resphead.ErrorCode, resphead.MsgSegHead.RetCode.Unwrap(), resphead.BytesRspExtendInfo, respbody)
 	if resphead.ErrorCode != 0 {
 		return errors.New("highway error code: " + strconv.Itoa(int(resphead.ErrorCode)))
@@ -163,8 +167,6 @@ func postHighwayContent(content io.Reader, serverURL string, end bool) (io.ReadC
 		return nil, err
 	}
 
-	// Create request
-	networkLogger.Debugln("post content to highway url:", server)
 	req, err := http.NewRequest("POST", server.String(), content)
 	if err != nil {
 		return nil, err

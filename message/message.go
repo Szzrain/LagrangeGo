@@ -7,10 +7,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LagrangeDev/LagrangeGo/packets/pb/message"
+	oidb2 "github.com/LagrangeDev/LagrangeGo/client/packets/pb/service/oidb"
+
+	"github.com/LagrangeDev/LagrangeGo/client/packets/pb/message"
+	"github.com/LagrangeDev/LagrangeGo/internal/proto"
 	"github.com/LagrangeDev/LagrangeGo/utils"
 	"github.com/LagrangeDev/LagrangeGo/utils/binary"
-	"github.com/LagrangeDev/LagrangeGo/utils/proto"
 )
 
 type IMessage interface {
@@ -96,10 +98,11 @@ func (s *Sender) IsAnonymous() bool {
 }
 
 func ParsePrivateMessage(msg *message.PushMsg) *PrivateMessage {
-	return &PrivateMessage{
-		Id:     int32(msg.Message.ContentHead.Sequence.Unwrap()),
-		Self:   int64(msg.Message.ResponseHead.ToUin),
-		Target: int64(msg.Message.ResponseHead.FromUin),
+	prvMsg := &PrivateMessage{
+		Id:         int32(msg.Message.ContentHead.Sequence.Unwrap()),
+		InternalId: int32(msg.Message.ContentHead.MsgId.Unwrap()),
+		Self:       int64(msg.Message.ResponseHead.ToUin),
+		Target:     int64(msg.Message.ResponseHead.FromUin),
 		Sender: &Sender{
 			Uin:      msg.Message.ResponseHead.FromUin,
 			Uid:      msg.Message.ResponseHead.FromUid.Unwrap(),
@@ -108,13 +111,19 @@ func ParsePrivateMessage(msg *message.PushMsg) *PrivateMessage {
 		Time:     int32(msg.Message.ContentHead.TimeStamp.Unwrap()),
 		Elements: parseMessageElements(msg.Message.Body.RichText.Elems),
 	}
+	if msg.Message != nil && msg.Message.Body != nil {
+		prvMsg.Elements = append(prvMsg.Elements, ParseMessageBody(msg.Message.Body, false)...)
+	}
+
+	return prvMsg
 }
 
 func ParseGroupMessage(msg *message.PushMsg) *GroupMessage {
-	return &GroupMessage{
-		Id:        int32(msg.Message.ContentHead.Sequence.Unwrap()),
-		GroupCode: msg.Message.ResponseHead.Grp.GroupUin,
-		GroupName: msg.Message.ResponseHead.Grp.GroupName,
+	grpMsg := &GroupMessage{
+		Id:         int32(msg.Message.ContentHead.Sequence.Unwrap()),
+		InternalId: int32(msg.Message.ContentHead.MsgId.Unwrap()),
+		GroupCode:  msg.Message.ResponseHead.Grp.GroupUin,
+		GroupName:  msg.Message.ResponseHead.Grp.GroupName,
 		Sender: &Sender{
 			Uin:      msg.Message.ResponseHead.FromUin,
 			Uid:      msg.Message.ResponseHead.FromUid.Unwrap(),
@@ -126,6 +135,10 @@ func ParseGroupMessage(msg *message.PushMsg) *GroupMessage {
 		Elements:       parseMessageElements(msg.Message.Body.RichText.Elems),
 		OriginalObject: msg.Message,
 	}
+	if msg.Message != nil && msg.Message.Body != nil {
+		grpMsg.Elements = append(grpMsg.Elements, ParseMessageBody(msg.Message.Body, true)...)
+	}
+	return grpMsg
 }
 
 func ParseTempMessage(msg *message.PushMsg) *TempMessage {
@@ -217,12 +230,12 @@ func parseMessageElements(msg []*message.Elem) []IMessageElement {
 				url = "http://gchat.qpic.cn" + elem.CustomFace.OrigUrl
 			}
 
-			res = append(res, &GroupImageElement{
+			res = append(res, &ImageElement{
 				FileId:  int64(elem.CustomFace.FileId),
 				ImageId: elem.CustomFace.FilePath,
 				Size:    elem.CustomFace.Size,
-				Width:   elem.CustomFace.Width,
-				Height:  elem.CustomFace.Height,
+				Width:   uint32(elem.CustomFace.Width),
+				Height:  uint32(elem.CustomFace.Height),
 				Url:     url,
 				Md5:     elem.CustomFace.Md5,
 			})
@@ -240,7 +253,7 @@ func parseMessageElements(msg []*message.Elem) []IMessageElement {
 				url = "http://gchat.qpic.cn" + elem.NotOnlineImage.OrigUrl
 			}
 
-			res = append(res, &FriendImageElement{
+			res = append(res, &ImageElement{
 				ImageId: elem.NotOnlineImage.FilePath,
 				Size:    elem.NotOnlineImage.FileLen,
 				Url:     url,
@@ -252,13 +265,39 @@ func parseMessageElements(msg []*message.Elem) []IMessageElement {
 	return res
 }
 
-func (msg *GroupMessage) ToString() (res string) {
+func ParseMessageBody(body *message.MessageBody, isGroup bool) []IMessageElement {
+	var res []IMessageElement
+	if body != nil {
+		if body.RichText != nil && body.RichText.Ptt != nil {
+			ptt := body.RichText.Ptt
+			switch {
+			case isGroup && ptt.FileId != 0:
+				res = append(res, &VoiceElement{
+					Name: ptt.FileName,
+					Node: &oidb2.IndexNode{
+						FileUuid: ptt.GroupFileKey,
+					},
+				})
+			case !isGroup:
+				res = append(res, &VoiceElement{
+					Name: ptt.FileName,
+					Node: &oidb2.IndexNode{
+						FileUuid: ptt.FileUuid,
+					},
+				})
+			}
+		}
+	}
+	return res
+}
+
+func (msg *GroupMessage) ToString() string {
 	var strBuilder strings.Builder
 	for _, elem := range msg.Elements {
 		switch e := elem.(type) {
 		case *TextElement:
 			strBuilder.WriteString(e.Content)
-		case *GroupImageElement:
+		case *ImageElement:
 			strBuilder.WriteString("[Image: ")
 			strBuilder.WriteString(e.ImageId)
 			strBuilder.WriteString("]")
@@ -275,18 +314,26 @@ func (msg *GroupMessage) ToString() (res string) {
 				strBuilder.WriteString(", isLargeFace: true]")
 			}
 			strBuilder.WriteString("]")
+		case *VoiceElement:
+			strBuilder.WriteString("[Record: ")
+			strBuilder.WriteString(e.Name)
+			strBuilder.WriteString("]")
 		}
 	}
-	res = strBuilder.String()
-	return
+	return strBuilder.String()
 }
+
+func (msg *PrivateMessage) ToString() string {
+	return ToReadableString(msg.Elements)
+}
+
 func ToReadableString(m []IMessageElement) string {
 	sb := new(strings.Builder)
 	for _, elem := range m {
 		switch e := elem.(type) {
 		case *TextElement:
 			sb.WriteString(e.Content)
-		case *GroupImageElement, *FriendImageElement:
+		case *ImageElement:
 			sb.WriteString("[图片]")
 		case *AtElement:
 			sb.WriteString(e.Display)
@@ -295,6 +342,10 @@ func ToReadableString(m []IMessageElement) string {
 		case *FaceElement:
 			sb.WriteString("[表情:")
 			sb.WriteString(strconv.FormatInt(int64(e.FaceID), 10))
+			sb.WriteString("]")
+		case *VoiceElement:
+			sb.WriteString("[语音:")
+			sb.WriteString(e.Name)
 			sb.WriteString("]")
 		}
 	}
@@ -327,30 +378,17 @@ func (msg *SendingMessage) FirstOrNil(f func(element IMessageElement) bool) IMes
 	return nil
 }
 
-func BuildMessageElements(msgElems []IMessageElement) (msgBody *message.MessageBody) {
+func PackElementsToBody(msgElems []IMessageElement) (msgBody *message.MessageBody) {
 	if len(msgElems) == 0 {
 		return
 	}
 	elems := make([]*message.Elem, 0, len(msgElems))
 	for _, elem := range msgElems {
-		var pb []*message.Elem
-		switch e := elem.(type) {
-		case *TextElement:
-			pb = e.BuildElement()
-		case *AtElement:
-			pb = e.BuildElement()
-		case *ReplyElement:
-			pb = e.BuildElement()
-		case *FaceElement:
-			pb = e.BuildElement()
-		case *GroupImageElement:
-			pb = e.BuildElement()
-		case *FriendImageElement:
-			pb = e.BuildElement()
-		default:
+		bd, ok := elem.(ElementBuilder)
+		if !ok {
 			continue
 		}
-		elems = append(elems, pb...)
+		elems = append(elems, bd.BuildElement()...)
 	}
 	msgBody = &message.MessageBody{
 		RichText: &message.RichText{Elems: elems},
